@@ -38,23 +38,19 @@ def load_special_dates(year: int) -> dict[str, dict[str, str]]:
     except FileNotFoundError:
         return {"special_holidays": {}, "special_workdays": {}}
 
-@server.tool()
-def check_holiday(target_date: str) -> dict[str, Any]:
-    """指定日が会社の休日か判定する。
-
-    Args:
-        target_date: ISO 8601形式の日付（YYYY-MM-DD）。
-
-    Returns:
-        is_holiday、holiday_name、date を含む判定結果（休日でない場合はNone）。
-    """
+def _check_holiday(
+    target_date: str, special_dates_cache: dict[int, dict[str, dict[str, str]]]
+) -> dict[str, Any]:
+    """指定日を判定する内部処理。年別設定は呼び出し間でキャッシュする。"""
     try:
         parsed_date = date.fromisoformat(target_date)
     except (TypeError, ValueError) as exc:
         raise ValueError("target_date は YYYY-MM-DD 形式で指定してください") from exc
     formatted_date = parsed_date.isoformat()
 
-    special_dates = load_special_dates(parsed_date.year)
+    if parsed_date.year not in special_dates_cache:
+        special_dates_cache[parsed_date.year] = load_special_dates(parsed_date.year)
+    special_dates = special_dates_cache[parsed_date.year]
 
     # 年別設定ファイルのキーは月日（MM-DD）で管理しているため、年を除いて比較する。
     month_day = formatted_date[5:]
@@ -77,11 +73,43 @@ def check_holiday(target_date: str) -> dict[str, Any]:
         return holiday_result(formatted_date, True, holiday_name)
 
     # 曜日判定
-    weekday = parsed_date.weekday()
-    if weekday in WEEKEND_DAYS:
+    if parsed_date.weekday() in WEEKEND_DAYS:
         return holiday_result(formatted_date, True, "休日")
 
     return holiday_result(formatted_date, False, "平日")
+
+
+@server.tool()
+def check_holiday(target_date: str) -> dict[str, Any]:
+    """指定日が会社の休日か判定する。
+
+    Args:
+        target_date: ISO 8601形式の日付（YYYY-MM-DD）。
+
+    Returns:
+        is_holiday、holiday_name、date を含む判定結果（休日でない場合はNone）。
+    """
+    return _check_holiday(target_date, {})
+
+
+@server.tool()
+def check_holidays(target_dates: list[str]) -> list[dict[str, Any]]:
+    """複数の日付が会社の休日か一括で判定する。
+
+    Args:
+        target_dates: ISO 8601形式の日付（YYYY-MM-DD）のリスト。
+
+    Returns:
+        各日付の判定結果を入力順に並べたリスト。
+    """
+    if not isinstance(target_dates, list):
+        raise ValueError("target_dates は日付文字列のリストで指定してください")
+
+    special_dates_cache: dict[int, dict[str, dict[str, str]]] = {}
+    return [
+        _check_holiday(target_date, special_dates_cache)
+        for target_date in target_dates
+    ]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
